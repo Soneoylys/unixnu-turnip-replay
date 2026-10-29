@@ -48,6 +48,16 @@ jobs:
         run: |
           export PATH="$(brew --prefix bison)/bin:$PATH"
           python3 scripts/build-turnip-darwin.py --target host
+      - name: Host kernel-stack smoke
+        working-directory: UniXNU
+        run: |
+          # Builds build/turnip-darwin-host/{plugin_smoke,libhostiokit.dylib} and runs the host simulation. Its last
+          # checks qualify cached QuartzCore pipelines against the iOS 17 OS image's default.metallib, which this job
+          # does not have; gen-turnip-replay.py needs only the two binaries, so a failure there is reported, not fatal.
+          export PATH="$(brew --prefix bison)/bin:$PATH"
+          python3 scripts/check-turnip-darwin-host.py 2>&1 | tee host-check.log || true
+          test -x build/turnip-darwin-host/plugin_smoke
+          test -f build/turnip-darwin-host/libhostiokit.dylib
       - name: Record the replay
         working-directory: UniXNU
         run: |
@@ -63,5 +73,6 @@ jobs:
             UniXNU/build/turnip-smoke/TurnipReplay.h
             UniXNU/build/turnip-replay
             UniXNU/.cache/*.log
+            UniXNU/host-check.log
             UniXNU/build/mesa-tu/meson-logs/meson-log.txt
           if-no-files-found: warn
