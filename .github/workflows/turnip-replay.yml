@@ -1,0 +1,67 @@
+# Record Turnip's first submission on an Apple Silicon host for the iPadOS 27 sheng AdrenoMetal plugin.
+# UniXNU's scripts/gen-turnip-replay.py runs the host copy of the Adreno kernel stack (kits/ArmSmmu4K needs
+# little-endian AArch64), so it cannot run on the Intel build host. Everything comes from the public UniXNU
+# repository at the given ref; the artifact is build/turnip-smoke/TurnipReplay.h plus logs.
+name: turnip-replay
+
+on:
+  workflow_dispatch:
+    inputs:
+      unixnu_ref:
+        description: UniXNU commit
+        default: e5f729d1ba299f1fe1ffd6e8dc68dbbaa321fe0c
+        required: true
+
+jobs:
+  replay:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out UniXNU
+        run: |
+          git init -q UniXNU
+          cd UniXNU
+          git remote add origin https://github.com/UniXNU/UniXNU.git
+          git fetch -q --depth 1 origin "${{ inputs.unixnu_ref }}"
+          git checkout -q FETCH_HEAD
+          git submodule update -q --init --depth 1 drivers/Adreno740 drivers/AdrenoMetal kits/ArmSmmu4K kits/AdrenoPM4
+          git log --oneline -1
+          uname -m
+      - name: Host tools
+        run: |
+          brew install -q glslang shaderc spirv-tools vulkan-headers bison ninja
+          python3 -m venv UniXNU/.cache/mesa-venv
+          UniXNU/.cache/mesa-venv/bin/pip install -q meson mako PyYAML packaging
+      - name: Mesa at the pin with its recorded patches
+        working-directory: UniXNU
+        run: |
+          pin() { python3 -c "import json,sys;d=json.load(open('scripts/data/adreno-compiler-inputs.json'));print(eval('d'+sys.argv[1]))" "$1"; }
+          git init -q .cache/mesa-work
+          git -C .cache/mesa-work remote add origin "$(pin "['mesa']['mirror']")"
+          git -C .cache/mesa-work fetch -q --depth 1 origin "$(pin "['mesa']['commit']")"
+          git -C .cache/mesa-work checkout -q FETCH_HEAD
+          for patch in $(python3 -c "import json;print(' '.join(json.load(open('scripts/data/adreno-compiler-inputs.json'))['patches']))"); do
+            git -C .cache/mesa-work apply "$PWD/$patch"
+          done
+      - name: Host Turnip
+        working-directory: UniXNU
+        run: |
+          export PATH="$(brew --prefix bison)/bin:$PATH"
+          python3 scripts/build-turnip-darwin.py --target host
+      - name: Record the replay
+        working-directory: UniXNU
+        run: |
+          export PATH="$(brew --prefix bison)/bin:$PATH"
+          python3 scripts/gen-turnip-replay.py
+          shasum -a 256 build/turnip-smoke/TurnipReplay.h
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: turnip-replay
+          path: |
+            UniXNU/build/turnip-smoke/TurnipReplay.h
+            UniXNU/build/turnip-replay
+            UniXNU/.cache/*.log
+            UniXNU/build/mesa-tu/meson-logs/meson-log.txt
+          if-no-files-found: warn
